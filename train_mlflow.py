@@ -13,7 +13,7 @@ import mlflow.pytorch
 import torch
 
 # Get MLflow tracking URI from environment variable (GitHub secret) or use local SQLite
-MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI") or "sqlite:///mlflow.db"
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 import torch.nn as nn
 import torch.optim as optim
