@@ -240,7 +240,7 @@ def main(args):
             optimizer = optim.RMSprop(model.parameters(), lr=args.learning_rate, weight_decay=weight_decay)
 
         # Learning rate scheduler - reduce LR when validation loss plateaus
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3, verbose=True)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
         mlflow.log_param("weight_decay", weight_decay)
 
