@@ -40,7 +40,7 @@ jobs:
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
         run: |
-          python train_mlflow.py --epochs 5 --experiment_name "CI_CD_Pipeline"
+          python train_mlflow.py --epochs 20 --experiment_name "CI_CD_Pipeline"
 
       - name: Verify model_info.txt Created
         run: |
