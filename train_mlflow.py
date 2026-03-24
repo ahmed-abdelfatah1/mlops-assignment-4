@@ -7,12 +7,14 @@ parameters, and artifacts to MLflow for experiment tracking.
 """
 
 import argparse
+import os
 import mlflow
 import mlflow.pytorch
 import torch
 
-# Set MLflow tracking URI to use SQLite database (same as UI)
-mlflow.set_tracking_uri("sqlite:///mlflow.db")
+# Get MLflow tracking URI from environment variable (GitHub secret) or use local SQLite
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -240,6 +242,7 @@ def main(args):
 
         # Log final metrics
         mlflow.log_metric("best_test_accuracy", best_test_accuracy)
+        mlflow.log_metric("accuracy", best_test_accuracy / 100.0)  # Decimal for threshold check
         mlflow.log_metric("final_train_loss", train_loss)
         mlflow.log_metric("final_test_loss", test_loss)
         mlflow.log_metric("training_time_seconds", training_time)
@@ -252,13 +255,21 @@ def main(args):
             registered_model_name=None,  # Set a name if you want to register it
         )
 
+        # Get the Run ID
+        run_id = mlflow.active_run().info.run_id
+
         print(f"\n{'='*60}")
         print(f"Training Complete!")
         print(f"Best Test Accuracy: {best_test_accuracy:.2f}%")
         print(f"Training Time: {training_time:.2f} seconds")
         print(f"{'='*60}")
         print(f"\nView results at: http://localhost:5000")
-        print(f"Run ID: {mlflow.active_run().info.run_id}")
+        print(f"Run ID: {run_id}")
+
+        # Export Run ID to model_info.txt for CI/CD pipeline
+        with open("model_info.txt", "w") as f:
+            f.write(run_id)
+        print(f"Run ID exported to model_info.txt")
 
 
 if __name__ == "__main__":
