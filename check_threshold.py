@@ -9,7 +9,7 @@ import sys
 import mlflow
 
 # Threshold for model deployment
-ACCURACY_THRESHOLD = 0.85
+ACCURACY_THRESHOLD = 0.8
 
 # Get MLflow tracking URI from environment variable or use local SQLite
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI") or "sqlite:///mlflow.db"

@@ -44,41 +44,56 @@ def setup_device():
     return device
 
 
-# Define a simple CNN model for CIFAR-10
+# Define a CNN model for CIFAR-10 with Batch Normalization to reduce overfitting
 class SimpleCNN(nn.Module):
     def __init__(self):
         super(SimpleCNN, self).__init__()
+        # Conv layers with Batch Normalization
         self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm2d(64)
         self.pool = nn.MaxPool2d(2, 2)
         self.fc1 = nn.Linear(64 * 4 * 4, 512)
+        self.bn4 = nn.BatchNorm1d(512)
         self.fc2 = nn.Linear(512, 10)
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, x):
-        x = self.pool(self.relu(self.conv1(x)))  # 32x32 -> 16x16
-        x = self.pool(self.relu(self.conv2(x)))  # 16x16 -> 8x8
-        x = self.pool(self.relu(self.conv3(x)))  # 8x8 -> 4x4
+        x = self.pool(self.relu(self.bn1(self.conv1(x))))  # 32x32 -> 16x16
+        x = self.pool(self.relu(self.bn2(self.conv2(x))))  # 16x16 -> 8x8
+        x = self.pool(self.relu(self.bn3(self.conv3(x))))  # 8x8 -> 4x4
         x = x.view(-1, 64 * 4 * 4)
-        x = self.dropout(self.relu(self.fc1(x)))
+        x = self.dropout(self.relu(self.bn4(self.fc1(x))))
         x = self.fc2(x)
         return x
 
 
 def get_data_loaders(batch_size, use_cuda=False):
     """Create train and test data loaders for CIFAR-10 with GPU optimization."""
-    transform = transforms.Compose([
+    # Data augmentation for training to reduce overfitting
+    train_transform = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    ])
+
+    # No augmentation for test data
+    test_transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
     ])
 
     train_dataset = datasets.CIFAR10(
-        root='./data', train=True, download=True, transform=transform
+        root='./data', train=True, download=True, transform=train_transform
     )
     test_dataset = datasets.CIFAR10(
-        root='./data', train=False, download=True, transform=transform
+        root='./data', train=False, download=True, transform=test_transform
     )
 
     # GPU optimization: pin_memory speeds up CPU to GPU transfer
@@ -188,7 +203,20 @@ def main(args):
         print(f"  Epochs: {args.epochs}")
         print(f"  Batch Size: {args.batch_size}")
         print(f"  Optimizer: {args.optimizer}")
+        print(f"Regularization Techniques:")
+        print(f"  Data Augmentation: Enabled (RandomCrop, HorizontalFlip, ColorJitter)")
+        print(f"  Batch Normalization: Enabled")
+        print(f"  Dropout: 0.5")
+        print(f"  Weight Decay (L2): 1e-4")
+        print(f"  LR Scheduler: ReduceLROnPlateau")
+        print(f"  Early Stopping: Patience=5")
         print(f"{'='*60}\n")
+
+        # Log regularization techniques
+        mlflow.log_param("data_augmentation", True)
+        mlflow.log_param("batch_normalization", True)
+        mlflow.log_param("dropout", 0.5)
+        mlflow.log_param("early_stop_patience", 5)
 
         # Log GPU info if available
         if use_cuda:
@@ -202,15 +230,25 @@ def main(args):
         model = SimpleCNN().to(device)
         criterion = nn.CrossEntropyLoss()
 
+        # Weight decay (L2 regularization) to reduce overfitting
+        weight_decay = 1e-4
         if args.optimizer == "Adam":
-            optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+            optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=weight_decay)
         elif args.optimizer == "SGD":
-            optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9)
+            optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=weight_decay)
         else:
-            optimizer = optim.RMSprop(model.parameters(), lr=args.learning_rate)
+            optimizer = optim.RMSprop(model.parameters(), lr=args.learning_rate, weight_decay=weight_decay)
+
+        # Learning rate scheduler - reduce LR when validation loss plateaus
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3, verbose=True)
+
+        mlflow.log_param("weight_decay", weight_decay)
 
         # Training loop
         best_test_accuracy = 0.0
+        best_test_loss = float('inf')
+        patience_counter = 0
+        early_stop_patience = 5  # Stop if no improvement for 5 epochs
         start_time = time.time()
 
         for epoch in range(1, args.epochs + 1):
@@ -230,13 +268,35 @@ def main(args):
             mlflow.log_metric("test_loss", test_loss, step=epoch)
             mlflow.log_metric("test_accuracy", test_accuracy, step=epoch)
 
-            # Track best accuracy
+            # Track best accuracy and check for improvement
             if test_accuracy > best_test_accuracy:
                 best_test_accuracy = test_accuracy
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            # Update best test loss for scheduler
+            if test_loss < best_test_loss:
+                best_test_loss = test_loss
+
+            # Step the scheduler based on validation loss
+            scheduler.step(test_loss)
+
+            # Log current learning rate
+            current_lr = optimizer.param_groups[0]['lr']
+            mlflow.log_metric("learning_rate", current_lr, step=epoch)
 
             print(f"Epoch [{epoch}/{args.epochs}] "
                   f"Train Loss: {train_loss:.4f}, Train Acc: {train_accuracy:.2f}% | "
-                  f"Test Loss: {test_loss:.4f}, Test Acc: {test_accuracy:.2f}%")
+                  f"Test Loss: {test_loss:.4f}, Test Acc: {test_accuracy:.2f}% | "
+                  f"LR: {current_lr:.6f}")
+
+            # Early stopping check
+            if patience_counter >= early_stop_patience:
+                print(f"\nEarly stopping triggered after {epoch} epochs (no improvement for {early_stop_patience} epochs)")
+                mlflow.log_param("early_stopped", True)
+                mlflow.log_param("stopped_at_epoch", epoch)
+                break
 
         training_time = time.time() - start_time
 
