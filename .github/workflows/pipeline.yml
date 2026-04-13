@@ -1,0 +1,181 @@
+# .github/workflows/pipeline.yml
+# MLOps Assignment: Multi-job CI/CD Pipeline with Gatekeeper Logic
+
+name: ML Model Validation and Deployment Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  # Job 1: Linter Job (Lightweight Gatekeeper)
+  linter:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Linting Tools
+        run: |
+          pip install --upgrade pip
+          pip install flake8
+
+      - name: Run Linter
+        run: |
+          echo "Running code linting checks..."
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          echo "Linting passed successfully!"
+
+  # Job 2: Train Job (Expensive GPU Job - Protected by Gatekeeper Logic)
+  train:
+    runs-on: ubuntu-latest
+    needs: linter  # Dependency: Must pass linter first
+    # Gatekeeper Conditions:
+    # 1. Linter job must pass (handled by 'needs')
+    # 2. Must be on main branch
+    # 3. Commit message must contain '[run-train]'
+    if: |
+      github.ref == 'refs/heads/main' &&
+      contains(github.event.head_commit.message, '[run-train]')
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Pull Data from DagsHub
+        env:
+          DAGSHUB_USER_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+        run: |
+          pip install dagshub
+          dagshub download --repo ahmed-abdelfatah1/mlops-assignment-4 "data" "./data"
+
+      - name: Train Model
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+        run: |
+          python train_mlflow.py --epochs 20 --experiment_name "CI_CD_Pipeline" 2>&1 | tee training_output.log
+
+      - name: Verify model_info.txt Created
+        run: |
+          if [ -f model_info.txt ]; then
+            echo "model_info.txt created successfully"
+            echo "Run ID: $(cat model_info.txt)"
+          else
+            echo "ERROR: model_info.txt was not created"
+            exit 1
+          fi
+
+      - name: Upload Model Info Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-info
+          path: model_info.txt
+          retention-days: 5
+
+      - name: Upload MLflow Data
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlflow-data
+          path: |
+            mlruns/
+            mlflow.db
+          retention-days: 5
+
+      # Failure Handler: Upload error logs if training fails
+      - name: Capture Error Logs on Failure
+        if: failure()
+        run: |
+          echo "=== Training Job Failed ===" > error_logs.txt
+          echo "Timestamp: $(date -u)" >> error_logs.txt
+          echo "Branch: ${{ github.ref }}" >> error_logs.txt
+          echo "Commit: ${{ github.sha }}" >> error_logs.txt
+          echo "Commit Message: ${{ github.event.head_commit.message }}" >> error_logs.txt
+          echo "" >> error_logs.txt
+          echo "=== Training Output Log ===" >> error_logs.txt
+          if [ -f training_output.log ]; then
+            cat training_output.log >> error_logs.txt
+          else
+            echo "No training output log available" >> error_logs.txt
+          fi
+          echo "" >> error_logs.txt
+          echo "=== System Information ===" >> error_logs.txt
+          python --version >> error_logs.txt 2>&1
+          pip list >> error_logs.txt 2>&1
+
+      - name: Upload Error Logs Artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-logs
+          path: error_logs.txt
+          retention-days: 7
+
+      # Cleanup Step: Always runs regardless of success or failure
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up temporary cloud volumes..."
+
+  # Job 3: Deployment Job
+  deploy:
+    runs-on: ubuntu-latest
+    needs: train  # Depends on train job
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download Model Info Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: model-info
+
+      - name: Download MLflow Data
+        uses: actions/download-artifact@v4
+        with:
+          name: mlflow-data
+
+      - name: Display Run ID
+        run: |
+          echo "Downloaded model_info.txt"
+          echo "Run ID: $(cat model_info.txt)"
+
+      - name: Check Accuracy Threshold
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+        run: |
+          python check_threshold.py
+
+      - name: Mock Docker Build
+        run: |
+          echo "Building Docker image for Run ID: $(cat model_info.txt)"
+          echo "Docker build completed successfully!"
