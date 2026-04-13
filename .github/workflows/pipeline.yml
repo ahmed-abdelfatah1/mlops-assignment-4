@@ -62,13 +62,6 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Pull Data from DagsHub
-        env:
-          DAGSHUB_USER_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
-        run: |
-          pip install dagshub
-          dagshub download --repo ahmed-abdelfatah1/mlops-assignment-4 "data" "./data"
-
       - name: Train Model
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
